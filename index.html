@@ -79,8 +79,39 @@
 </head>
 <body>
 <main>
-  <h1>Panel de servidor</h1>
+  <div style="display:flex;align-items:center;gap:10px">
+    <h1 style="flex:1">Panel de servidor</h1>
+    <button id="btnLock" class="secondary hidden" style="min-height:38px;padding:8px 14px">Bloquear</button>
+  </div>
   <p class="sub">Todo se cifra y se firma aquí, en tu teléfono. GitHub solo recibe texto sin sentido.</p>
+
+  <!-- PIN de la página -->
+  <section class="card hidden" id="cardLockOpen">
+    <h2>Página bloqueada</h2>
+    <p>Escribe tu PIN. Tus llaves y tu token están guardados cifrados en este teléfono.</p>
+    <label for="pinOpen">PIN</label>
+    <input id="pinOpen" type="password" inputmode="numeric" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="row"><button id="btnUnlock" class="grow">Abrir</button></div>
+    <div class="msg" id="msgLock"></div>
+    <details style="margin-top:12px">
+      <summary>Olvidé mi PIN</summary>
+      <p>No hay forma de recuperarlo. Puedes borrar todo de este teléfono y volver a empezar: importas tu kit de respaldo (de la app Contraseñas) y pegas un token nuevo de GitHub. Tu familia no nota nada.</p>
+      <div class="row"><button id="btnWipe" class="danger grow">Borrar todo de este teléfono</button></div>
+    </details>
+  </section>
+  <section class="card hidden" id="cardLockNew">
+    <h2 id="pinNewTitle">Crea un PIN para esta página</h2>
+    <p>Protege tus llaves y tu token: sin el PIN, nadie puede ver ni publicar nada, aunque tenga tu teléfono. Usa 6 números o más. Se pide cada vez que abres la página.</p>
+    <label for="pinNew1">PIN nuevo</label>
+    <input id="pinNew1" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <label for="pinNew2">Repite el PIN</label>
+    <input id="pinNew2" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="row">
+      <button id="btnPinSave" class="grow">Guardar PIN</button>
+      <button id="btnPinCancel" class="secondary hidden">Cancelar</button>
+    </div>
+    <div class="msg" id="msgPinNew"></div>
+  </section>
 
   <!-- 1. GitHub -->
   <section class="card" id="cardGh">
@@ -127,6 +158,9 @@
         <div class="row">
           <button id="btnCopyKit" class="secondary grow">Copiar kit</button>
           <button id="btnForget" class="danger grow">Borrar de este teléfono</button>
+        </div>
+        <div class="row">
+          <button id="btnChangePin" class="secondary grow">Cambiar PIN de la página</button>
         </div>
       </details>
     </div>
@@ -313,8 +347,58 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e
 function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
 
 let cfg = null, kit = null, current = null;
+// Versiones anteriores guardaban todo sin cifrar: se lee una vez para pasarlo a la caja con PIN.
 try { cfg = JSON.parse(lsGet(LS_CFG) || 'null'); } catch (e) {}
 try { const t = lsGet(LS_KIT); if (t) kit = kitFromText(t); } catch (e) {}
+
+// ---------------- Caja con PIN (cfg + kit cifrados en este teléfono) ----------------
+const LS_VAULT = 'panel.vault', LS_FAILS = 'panel.fails';
+const PIN_ITER = 600000;
+let vaultKey = null, vaultSalt = null;
+let locked = !!lsGet(LS_VAULT);
+let pinMode = locked ? 'open' : 'new'; // 'open' | 'new' | 'change' | null
+let hiddenAt = 0;
+
+async function pinKeyFrom(pin, salt) {
+  const base = await crypto.subtle.importKey('raw', te.encode(pin), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: PIN_ITER, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+/** Guarda cfg + kit cifrados con el PIN. Borra la copia sin cifrar de versiones anteriores. */
+async function saveVault() {
+  if (!vaultKey) return;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = te.encode(JSON.stringify({ cfg, kit: kit ? kitToText(kit) : null }));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, vaultKey, data);
+  lsSet(LS_VAULT, JSON.stringify({ v: 1, salt: b64(vaultSalt), iv: b64(iv), ct: b64(ct) }));
+  lsDel(LS_CFG); lsDel(LS_KIT);
+}
+async function setPin(pin) {
+  vaultSalt = crypto.getRandomValues(new Uint8Array(16));
+  vaultKey = await pinKeyFrom(pin, vaultSalt);
+  await saveVault();
+  locked = false;
+}
+async function openVault(pin) {
+  const v = JSON.parse(lsGet(LS_VAULT));
+  const salt = unb64(v.salt);
+  const key = await pinKeyFrom(pin, salt);
+  let pt;
+  try { pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(v.iv) }, key, unb64(v.ct)); }
+  catch (e) { return false; }
+  const d = JSON.parse(td.decode(pt));
+  cfg = d.cfg || null;
+  kit = d.kit ? kitFromText(d.kit) : null;
+  vaultKey = key; vaultSalt = salt; locked = false;
+  return true;
+}
+function lockNow() {
+  if (!lsGet(LS_VAULT)) return;
+  cfg = null; kit = null; current = null; vaultKey = null; vaultSalt = null;
+  locked = true; pinMode = 'open';
+  ['ghUser', 'ghRepo', 'ghToken', 'kitIn', 'srv1', 'srv2', 'srv3', 'known'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  render();
+}
 
 const $ = id => document.getElementById(id);
 function say(id, text, kind) { const el = $(id); el.textContent = text || ''; el.className = 'msg' + (kind ? ' ' + kind : ''); }
@@ -417,6 +501,16 @@ async function putFile(fileObj, sha, message) {
 
 // ---------------- Pantalla ----------------
 function render() {
+  const showNew = pinMode === 'new' || pinMode === 'change';
+  $('cardLockOpen').classList.toggle('hidden', pinMode !== 'open');
+  $('cardLockNew').classList.toggle('hidden', !showNew);
+  $('btnPinCancel').classList.toggle('hidden', pinMode !== 'change');
+  $('pinNewTitle').textContent = pinMode === 'change' ? 'Cambiar el PIN de la página' : 'Crea un PIN para esta página';
+  $('btnLock').classList.toggle('hidden', !!pinMode || !lsGet(LS_VAULT));
+  const blocked = !!pinMode;
+  ['cardGh', 'cardKeys', 'cardQwen', 'cardPub', 'cardApp', 'cardRotate'].forEach(id => $(id).classList.toggle('hidden', blocked));
+  if (blocked) return;
+  $('cardGh').classList.remove('hidden'); $('cardKeys').classList.remove('hidden');
   if (cfg) {
     $('ghUser').value = cfg.user; $('ghRepo').value = cfg.repo; $('ghPath').value = cfg.path; $('ghToken').value = cfg.token;
   }
@@ -494,7 +588,7 @@ $('btnGhSave').onclick = async () => {
     if (!r.ok) throw new Error(ghError(r));
     if (r.data && r.data.private) say('msgGh', 'Conectado, pero el repositorio es PRIVADO: las TV no podrán leer el archivo. Hazlo público (el archivo va cifrado).', 'warn');
     else say('msgGh', 'Conectado ✓', 'ok');
-    lsSet(LS_CFG, JSON.stringify(cfg));
+    await saveVault();
     render();
     if (kit) reload();
   } catch (e) { say('msgGh', e.message, 'bad'); }
@@ -503,17 +597,17 @@ $('btnGhSave').onclick = async () => {
 $('btnCreate').onclick = async () => {
   if (kit && !confirm('Ya hay llaves. ¿Crear otras?')) return;
   kit = await newKit();
-  lsSet(LS_KIT, kitToText(kit));
+  await saveVault();
   render();
   $('keysHave').querySelector('details').open = true;
   say('msgKeys', 'Listo. Guarda ahora el kit de respaldo (arriba) en la app Contraseñas o en una nota bloqueada.', 'warn');
   if (cfg) reload();
 };
 $('btnShowImport').onclick = () => $('importBox').classList.toggle('hidden');
-$('btnImport').onclick = () => {
+$('btnImport').onclick = async () => {
   try {
     kit = kitFromText($('kitIn').value);
-    lsSet(LS_KIT, kitToText(kit));
+    await saveVault();
     $('kitIn').value = '';
     render();
     say('msgKeys', 'Kit importado ✓', 'ok');
@@ -527,9 +621,9 @@ $('btnRevealPass').onclick = () => {
 };
 $('btnCopyPass').onclick = () => copy(kit.pass, 'msgKeys');
 $('btnCopyKit').onclick = () => copy(kitToText(kit), 'msgKeys');
-$('btnForget').onclick = () => {
+$('btnForget').onclick = async () => {
   if (!confirm('¿Borrar las llaves de este teléfono? Sin el kit de respaldo no podrás volver a publicar.')) return;
-  lsDel(LS_KIT); kit = null; current = null; render(); say('msgKeys', 'Borrado de este teléfono.');
+  kit = null; current = null; await saveVault(); render(); say('msgKeys', 'Borrado de este teléfono.');
 };
 $('btnCopyQwen').onclick = () => copy($('qwenText').textContent, 'msgKeys');
 $('btnShareQwen').onclick = async () => {
@@ -623,7 +717,7 @@ $('btnRotate').onclick = async () => {
     const cur = await loadCurrent();
     if (!cur.exists) {
       kit = { ...kit, pass: newPass() };
-      lsSet(LS_KIT, kitToText(kit));
+      await saveVault();
       render();
       say('msgRot', 'Server Pass nuevo creado (todavía no había nada publicado). Guarda el kit de respaldo otra vez.', 'warn');
       return;
@@ -646,7 +740,7 @@ $('btnRotate').onclick = async () => {
     const fileObj = await seal(next, next.gen, n, payload);
     await putFile(fileObj, cur.sha, 'rotate ' + next.gen);
     kit = next;
-    lsSet(LS_KIT, kitToText(kit));
+    await saveVault();
     render();
     $('keysHave').querySelector('details').open = true;
     say('msgRot', 'Listo ✓ Nuevo Server Pass: ' + kit.pass + '\nGuarda otra vez el kit de respaldo: el anterior ya no sirve.', 'ok');
@@ -656,8 +750,66 @@ $('btnRotate').onclick = async () => {
   finally { $('btnRotate').disabled = false; }
 };
 
+// ---------------- PIN: botones ----------------
+function failState() { try { return JSON.parse(lsGet(LS_FAILS) || '{"n":0,"until":0}'); } catch (e) { return { n: 0, until: 0 }; } }
+$('btnUnlock').onclick = async () => {
+  const f = failState();
+  if (Date.now() < f.until) return say('msgLock', 'Demasiados intentos. Espera ' + Math.ceil((f.until - Date.now()) / 1000) + ' segundos.', 'bad');
+  const pin = $('pinOpen').value;
+  if (!pin) return;
+  $('btnUnlock').disabled = true;
+  say('msgLock', 'Abriendo…');
+  try {
+    if (await openVault(pin)) {
+      lsDel(LS_FAILS);
+      $('pinOpen').value = ''; say('msgLock', '');
+      pinMode = null; render();
+      if (cfg && kit) reload();
+    } else {
+      const n = f.n + 1;
+      const wait = n >= 5 ? Math.min(30000 * Math.pow(2, n - 5), 3600000) : 0;
+      lsSet(LS_FAILS, JSON.stringify({ n, until: Date.now() + wait }));
+      $('pinOpen').value = '';
+      say('msgLock', 'PIN incorrecto.' + (wait ? ' Espera ' + (wait / 1000) + ' segundos para volver a intentar.' : ''), 'bad');
+    }
+  } catch (e) { say('msgLock', 'No se pudo abrir: ' + e.message, 'bad'); }
+  finally { $('btnUnlock').disabled = false; }
+};
+$('pinOpen').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnUnlock').click(); });
+$('btnPinSave').onclick = async () => {
+  const a = $('pinNew1').value, b = $('pinNew2').value;
+  if (a.length < 6) return say('msgPinNew', 'Usa al menos 6 caracteres (mejor 6 números o más).', 'bad');
+  if (a !== b) return say('msgPinNew', 'Los dos PIN no coinciden.', 'bad');
+  $('btnPinSave').disabled = true;
+  say('msgPinNew', 'Guardando…');
+  try {
+    await setPin(a);
+    $('pinNew1').value = ''; $('pinNew2').value = '';
+    const was = pinMode;
+    pinMode = null; say('msgPinNew', '');
+    render();
+    say(was === 'change' ? 'msgKeys' : 'msgGh', was === 'change' ? 'PIN cambiado ✓' : 'PIN guardado ✓ Tus datos quedan cifrados en este teléfono.', 'ok');
+    if (cfg && kit) reload();
+  } catch (e) { say('msgPinNew', e.message, 'bad'); }
+  finally { $('btnPinSave').disabled = false; }
+};
+$('btnPinCancel').onclick = () => { pinMode = null; $('pinNew1').value = ''; $('pinNew2').value = ''; render(); };
+$('btnChangePin').onclick = () => { pinMode = 'change'; render(); window.scrollTo(0, 0); };
+$('btnLock').onclick = lockNow;
+$('btnWipe').onclick = () => {
+  if (!confirm('¿Borrar TODO de este teléfono (llaves, token y PIN)? Necesitarás tu kit de respaldo y un token nuevo.')) return;
+  [LS_VAULT, LS_FAILS, LS_CFG, LS_KIT].forEach(lsDel);
+  cfg = null; kit = null; current = null; vaultKey = null; locked = false; pinMode = 'new';
+  render();
+};
+// Se bloquea sola si la página estuvo en segundo plano 2 minutos o más.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { hiddenAt = Date.now(); return; }
+  if (hiddenAt && Date.now() - hiddenAt >= 120000 && !pinMode) lockNow();
+  hiddenAt = 0;
+});
+
 render();
-if (cfg && kit) reload();
 </script>
 </body>
 </html>

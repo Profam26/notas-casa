@@ -166,7 +166,20 @@
     <div class="msg" id="msgPub"></div>
   </section>
 
-  <!-- 5. Cambiar clave -->
+  <!-- 5. Actualizacion de la app -->
+  <section class="card hidden" id="cardApp">
+    <h2><span class="step">5</span> Actualización de la app</h2>
+    <p>Elige el APK nuevo (guárdalo antes en Archivos). Se sube cifrado: GitHub solo ve un archivo sin sentido. Las TV lo ofrecen al abrir la app.</p>
+    <dl class="kv" id="appInfo"><dt>Publicada</dt><dd>—</dd></dl>
+    <label for="apkFile">APK</label>
+    <input id="apkFile" type="file">
+    <label for="apkVer">Versión (como dice el nombre del APK)</label>
+    <input id="apkVer" inputmode="decimal" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="1.11.0">
+    <div class="row"><button id="btnPublishApp" class="grow">Publicar actualización</button></div>
+    <div class="msg" id="msgApp"></div>
+  </section>
+
+  <!-- 6. Cambiar clave -->
   <section class="card hidden" id="cardRotate">
     <h2>Cambiar el Server Pass</h2>
     <p>Úsalo solo si alguien que no debe conoce la clave. Todas las TV pedirán la nueva al abrir la app. El servidor publicado no cambia.</p>
@@ -184,10 +197,10 @@ const te = new TextEncoder();
 const td = new TextDecoder();
 
 function b64(bytes) {
-  let s = '';
   const u = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
-  return btoa(s);
+  const parts = [];
+  for (let i = 0; i < u.length; i += 0x8000) parts.push(String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)));
+  return btoa(parts.join(''));
 }
 function unb64(str) {
   const s = atob(String(str).replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, ''));
@@ -256,6 +269,32 @@ async function openFile(kit, f) {
   return JSON.parse(td.decode(pt));
 }
 
+// ---- APK de la app (cifrado con la misma clave del Server Pass) ----
+function apkAad(g, name) { return te.encode(`${MAGIC}-APK|${g}|${name}`); }
+async function sha256Hex(bytes) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(h, b => b.toString(16).padStart(2, '0')).join('');
+}
+/** Devuelve iv (12 bytes) + cifrado. */
+async function sealApk(kit, g, name, plain) {
+  const key = await deriveKey(kit.pass, g, ITER);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: apkAad(g, name), tagLength: 128 }, key, plain));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv, 0); out.set(ct, 12);
+  return out;
+}
+async function openApk(kit, g, name, blob) {
+  const key = await deriveKey(kit.pass, g, ITER);
+  const u = new Uint8Array(blob);
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.subarray(0, 12), additionalData: apkAad(g, name), tagLength: 128 }, key, u.subarray(12)));
+}
+function versionNewer(a, b) {
+  const x = String(a).split('.').map(n => parseInt(n, 10) || 0), y = String(b).split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) { const p = x[i] || 0, q = y[i] || 0; if (p !== q) return p > q; }
+  return false;
+}
+
 function normalizeServer(s) {
   let x = String(s || '').trim();
   if (!x) return '';
@@ -287,6 +326,43 @@ async function copy(text, msgId) {
 // ---------------- GitHub ----------------
 function rawUrl() { return `https://raw.githubusercontent.com/${cfg.user}/${cfg.repo}/main/${cfg.path}`; }
 function apiUrl() { return `https://api.github.com/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/contents/${cfg.path.split('/').map(encodeURIComponent).join('/')}`; }
+function repoApi() { return `https://api.github.com/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}`; }
+function dirOf() { const i = cfg.path.lastIndexOf('/'); return i >= 0 ? cfg.path.slice(0, i + 1) : ''; }
+
+/** Baja un archivo del repositorio tal cual (bytes). */
+async function ghRaw(path) {
+  const url = repoApi() + '/contents/' + path.split('/').map(encodeURIComponent).join('/') + '?ref=main&t=' + Date.now();
+  const r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github.raw', 'X-GitHub-Api-Version': '2022-11-28' }, cache: 'no-store' });
+  if (!r.ok) throw new Error('No se pudo bajar ' + path + ' (' + r.status + ')');
+  return new Uint8Array(await r.arrayBuffer());
+}
+async function ghExists(path) {
+  const r = await gh('GET', repoApi() + '/contents/' + path.split('/').map(encodeURIComponent).join('/') + '?ref=main&t=' + Date.now());
+  return r.ok;
+}
+
+/** Un solo cambio en el repositorio: agrega y/o borra archivos (sirve para archivos grandes). */
+async function commitFiles(message, adds, removes) {
+  const ref = await gh('GET', repoApi() + '/git/ref/heads/main');
+  if (!ref.ok) throw new Error(ghError(ref));
+  const head = ref.data.object.sha;
+  const commit = await gh('GET', repoApi() + '/git/commits/' + head);
+  if (!commit.ok) throw new Error(ghError(commit));
+  const tree = [];
+  for (const a of adds) {
+    const blob = await gh('POST', repoApi() + '/git/blobs', { content: a.content, encoding: 'base64' });
+    if (!blob.ok) throw new Error(ghError(blob));
+    tree.push({ path: a.path, mode: '100644', type: 'blob', sha: blob.data.sha });
+  }
+  for (const path of removes) tree.push({ path, mode: '100644', type: 'blob', sha: null });
+  const t = await gh('POST', repoApi() + '/git/trees', { base_tree: commit.data.tree.sha, tree });
+  if (!t.ok) throw new Error(ghError(t));
+  const c = await gh('POST', repoApi() + '/git/commits', { message, tree: t.data.sha, parents: [head] });
+  if (!c.ok) throw new Error(ghError(c));
+  const u = await gh('PATCH', repoApi() + '/git/refs/heads/main', { sha: c.data.sha });
+  if (!u.ok) throw new Error(ghError(u));
+}
+
 async function gh(method, url, body) {
   const r = await fetch(url, {
     method,
@@ -357,6 +433,7 @@ function render() {
   $('cardQwen').classList.toggle('hidden', !ready);
   $('cardPub').classList.toggle('hidden', !ready);
   $('cardRotate').classList.toggle('hidden', !ready);
+  $('cardApp').classList.toggle('hidden', !ready);
   if (ready) {
     $('qwenText').textContent =
 `Qwen: abre aurora-tv/app/src/main/java/com/aurora/tv/data/ServerSyncConfig.kt y cambia SOLO estas dos líneas (cópialas exactas, sin espacios extra):
@@ -368,7 +445,17 @@ No cambies nada más en ese archivo.`;
   }
 }
 
+function showApp() {
+  const dl = $('appInfo');
+  dl.innerHTML = '';
+  const a = current && current.payload && current.payload.app;
+  const dt = document.createElement('dt'); dt.textContent = 'Publicada';
+  const dd = document.createElement('dd'); dd.textContent = a ? a.name + ' · ' + (a.size / 1048576).toFixed(1) + ' MB' : 'Ninguna';
+  dl.append(dt, dd);
+}
+
 function showCurrent() {
+  showApp();
   const dl = $('curInfo');
   dl.innerHTML = '';
   const add = (k, v, cls) => {
@@ -475,6 +562,7 @@ $('btnPublish').onclick = async () => {
     known = known.concat($('known').value.split(/[\s,]+/).map(hostOf))
       .filter(Boolean).filter((h, i, a) => a.indexOf(h) === i).slice(-30);
     const payload = { servers, known, n, t: Math.floor(Date.now() / 1000) };
+    if (cur.payload && cur.payload.app) payload.app = cur.payload.app; // la app publicada se conserva
     const fileObj = await seal(kit, g, n, payload);
     await putFile(fileObj, cur.sha, 'update ' + n);
     say('msgPub', 'Publicado ✓ Las TV lo toman al abrir la app, cada 6 horas o en cuanto falle el servidor anterior. GitHub puede tardar hasta 5 minutos en mostrarlo.', 'ok');
@@ -482,6 +570,49 @@ $('btnPublish').onclick = async () => {
     showCurrent();
   } catch (e) { say('msgPub', e.message, 'bad'); }
   finally { $('btnPublish').disabled = false; }
+};
+
+$('apkFile').onchange = () => {
+  const f = $('apkFile').files[0];
+  const m = f && f.name.match(/(\d+\.\d+(?:\.\d+){0,2})/);
+  if (m) $('apkVer').value = m[1];
+};
+
+$('btnPublishApp').onclick = async () => {
+  const f = $('apkFile').files[0];
+  const name = $('apkVer').value.trim();
+  if (!f) return say('msgApp', 'Elige el APK.', 'bad');
+  if (!/^\d+(\.\d+){1,3}$/.test(name)) return say('msgApp', 'Escribe la versión, por ejemplo 1.11.0', 'bad');
+  $('btnPublishApp').disabled = true;
+  try {
+    say('msgApp', 'Leyendo el APK…');
+    const plain = new Uint8Array(await f.arrayBuffer());
+    if (plain.length < 1000 || plain[0] !== 0x50 || plain[1] !== 0x4b) throw new Error('Ese archivo no parece un APK.');
+    const cur = await loadCurrent();
+    if (!cur.exists || !cur.payload) throw new Error('Primero publica el servidor (paso 4).' + (cur.error ? ' ' + cur.error : ''));
+    if (cur.file.g !== kit.gen) throw new Error('Lo publicado usa otro Server Pass que el de este teléfono. Importa tu kit más reciente.');
+    const prev = cur.payload.app;
+    if (prev && !versionNewer(name, prev.name) && !confirm('La versión ' + name + ' no es más nueva que la publicada (' + prev.name + '). Las TV no la ofrecerán. ¿Publicar igual?')) throw new Error('Cancelado.');
+    say('msgApp', 'Cifrando…');
+    const g = cur.file.g;
+    const sha = await sha256Hex(plain);
+    const file = `app-${name}-g${g}.bin`;
+    const blob = await sealApk(kit, g, name, plain);
+    say('msgApp', 'Subiendo a GitHub (' + (blob.length / 1048576).toFixed(1) + ' MB)…');
+    const removes = [];
+    if (prev && prev.file !== file && await ghExists(dirOf() + prev.file)) removes.push(dirOf() + prev.file);
+    await commitFiles('app ' + name, [{ path: dirOf() + file, content: b64(blob) }], removes);
+    const n = (Number(cur.file.n) || 0) + 1;
+    const payload = { ...cur.payload, n, t: Math.floor(Date.now() / 1000), app: { name, file, sha, size: plain.length } };
+    const fileObj = await seal(kit, g, n, payload);
+    const fresh = await loadCurrent(); // el archivo de servidores no cambió, pero se pide su sha actual
+    await putFile(fileObj, fresh.sha, 'app ' + name);
+    say('msgApp', 'Publicada ✓ Las TV con Server Pass ofrecerán la versión ' + name + ' al abrir la app (GitHub puede tardar hasta 5 minutos).', 'ok');
+    current = { exists: true, file: fileObj, payload, sha: null };
+    showCurrent();
+    $('apkFile').value = '';
+  } catch (e) { say('msgApp', e.message, 'bad'); }
+  finally { $('btnPublishApp').disabled = false; }
 };
 
 $('btnRotate').onclick = async () => {
@@ -501,6 +632,17 @@ $('btnRotate').onclick = async () => {
     const next = { ...kit, pass: newPass(), gen: cur.file.g + 1 };
     const n = (Number(cur.file.n) || 0) + 1;
     const payload = { servers: cur.payload.servers, known: cur.payload.known || [], n, t: Math.floor(Date.now() / 1000) };
+    const oldApp = cur.payload.app;
+    if (oldApp) {
+      // El APK publicado se vuelve a cifrar con la clave nueva.
+      say('msgRot', 'Volviendo a cifrar la app con la clave nueva…');
+      const blob = await ghRaw(dirOf() + oldApp.file);
+      const plain = await openApk(kit, cur.file.g, oldApp.name, blob);
+      if (await sha256Hex(plain) !== oldApp.sha) throw new Error('El APK publicado no coincide con su huella. No se cambió nada.');
+      const file = `app-${oldApp.name}-g${next.gen}.bin`;
+      await commitFiles('app ' + oldApp.name + ' g' + next.gen, [{ path: dirOf() + file, content: b64(await sealApk(next, next.gen, oldApp.name, plain)) }], [dirOf() + oldApp.file]);
+      payload.app = { ...oldApp, file };
+    }
     const fileObj = await seal(next, next.gen, n, payload);
     await putFile(fileObj, cur.sha, 'rotate ' + next.gen);
     kit = next;

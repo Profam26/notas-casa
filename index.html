@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Servidor">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="robots" content="noindex, nofollow">
+<title>Panel de servidor</title>
+<style>
+  :root {
+    --bg: #f4f4f7; --card: #ffffff; --text: #16161d; --muted: #6b6b7b; --line: #e3e3ea;
+    --accent: #e5193f; --accent-text: #ffffff; --ok: #1f9d55; --warn: #c27803; --bad: #d92d20;
+    --field: #f6f6f9; --code: #f0f0f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0b10; --card: #16161e; --text: #f3f3f7; --muted: #9a9aab; --line: #2a2a36;
+      --field: #1e1e28; --code: #1e1e28; --ok: #34c77b; --warn: #f0a92e; --bad: #ff6b5f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0b10; --card: #16161e; --text: #f3f3f7; --muted: #9a9aab; --line: #2a2a36;
+    --field: #1e1e28; --code: #1e1e28; --ok: #34c77b; --warn: #f0a92e; --bad: #ff6b5f;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 8px 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 18px; font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin: 0 0 14px; }
+  .card h2 { font-size: 17px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  .card p { margin: 6px 0 12px; color: var(--muted); font-size: 14px; }
+  .step { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%;
+          background: var(--accent); color: var(--accent-text); font-size: 13px; font-weight: 700; flex: none; }
+  .done .step { background: var(--ok); }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  input, textarea {
+    width: 100%; font: inherit; color: var(--text); background: var(--field);
+    border: 1px solid var(--line); border-radius: 12px; padding: 11px 12px; -webkit-appearance: none;
+  }
+  textarea { min-height: 76px; resize: vertical; font: 13px/1.4 ui-monospace, Menlo, monospace; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  button {
+    font: inherit; font-weight: 650; border: 0; border-radius: 12px; padding: 12px 16px; cursor: pointer;
+    background: var(--accent); color: var(--accent-text); min-height: 46px;
+  }
+  button.secondary { background: var(--field); color: var(--text); border: 1px solid var(--line); }
+  button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
+  button:disabled { opacity: .5; }
+  .grow { flex: 1 1 auto; }
+  .msg { margin-top: 10px; font-size: 14px; min-height: 1px; white-space: pre-wrap; }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); } .msg.warn { color: var(--warn); }
+  .pass {
+    font: 700 24px/1.2 ui-monospace, Menlo, monospace; letter-spacing: .06em; text-align: center;
+    background: var(--code); border-radius: 12px; padding: 14px; margin: 8px 0; user-select: all;
+  }
+  .code {
+    font: 12.5px/1.45 ui-monospace, Menlo, monospace; background: var(--code); border-radius: 12px;
+    padding: 12px; white-space: pre-wrap; word-break: break-all; user-select: all;
+  }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-all; }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 99px;
+          background: var(--field); color: var(--muted); }
+  .pill.ok { color: var(--ok); } .pill.bad { color: var(--bad); }
+  .hidden { display: none !important; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+  .warnbox { border-left: 3px solid var(--warn); padding: 8px 10px; background: var(--field); border-radius: 8px;
+             font-size: 14px; color: var(--text); margin: 10px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Panel de servidor</h1>
+  <p class="sub">Todo se cifra y se firma aquí, en tu teléfono. GitHub solo recibe texto sin sentido.</p>
+
+  <!-- 1. GitHub -->
+  <section class="card" id="cardGh">
+    <h2><span class="step">1</span> Conectar con GitHub</h2>
+    <p>Se guarda solo en este teléfono.</p>
+    <label for="ghUser">Usuario de GitHub</label>
+    <input id="ghUser" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Ej: thomas">
+    <label for="ghRepo">Repositorio</label>
+    <input id="ghRepo" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Ej: notas-casa">
+    <label for="ghPath">Archivo</label>
+    <input id="ghPath" autocapitalize="off" autocorrect="off" spellcheck="false" value="data.json">
+    <label for="ghToken">Token de GitHub</label>
+    <input id="ghToken" type="password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="github_pat_…">
+    <div class="row"><button id="btnGhSave" class="grow">Guardar y probar</button></div>
+    <div class="msg" id="msgGh"></div>
+  </section>
+
+  <!-- 2. Llaves -->
+  <section class="card" id="cardKeys">
+    <h2><span class="step">2</span> Llaves y Server Pass</h2>
+    <div id="keysNone">
+      <p>La primera vez se crean tus llaves y el Server Pass. Si ya los tienes (por ejemplo, borraste Safari), importa tu kit.</p>
+      <div class="row">
+        <button id="btnCreate" class="grow">Crear llaves nuevas</button>
+        <button id="btnShowImport" class="secondary grow">Importar mi kit</button>
+      </div>
+      <div id="importBox" class="hidden">
+        <label for="kitIn">Pega tu kit (empieza con AURKIT1:)</label>
+        <textarea id="kitIn" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+        <div class="row"><button id="btnImport" class="grow">Importar</button></div>
+      </div>
+    </div>
+    <div id="keysHave" class="hidden">
+      <p>Server Pass para tu familia (se escribe una vez en cada TV):</p>
+      <div class="pass" id="passShow">••••-••••-••••</div>
+      <div class="row">
+        <button id="btnRevealPass" class="secondary grow">Mostrar</button>
+        <button id="btnCopyPass" class="secondary grow">Copiar</button>
+      </div>
+      <details style="margin-top:12px">
+        <summary>Kit de respaldo (llave privada + Server Pass)</summary>
+        <div class="warnbox">Guárdalo en la app <b>Contraseñas</b> o en una nota bloqueada. No lo mandes por chat: con este kit cualquiera podría cambiar tu servidor.</div>
+        <div class="code" id="kitShow"></div>
+        <div class="row">
+          <button id="btnCopyKit" class="secondary grow">Copiar kit</button>
+          <button id="btnForget" class="danger grow">Borrar de este teléfono</button>
+        </div>
+      </details>
+    </div>
+    <div class="msg" id="msgKeys"></div>
+  </section>
+
+  <!-- 3. Qwen -->
+  <section class="card hidden" id="cardQwen">
+    <h2><span class="step">3</span> Mensaje para Qwen</h2>
+    <p>Esto va dentro de la app. No es secreto: puedes enviártelo por correo para pegarlo en la computadora.</p>
+    <div class="code" id="qwenText"></div>
+    <div class="row">
+      <button id="btnCopyQwen" class="secondary grow">Copiar</button>
+      <button id="btnShareQwen" class="secondary grow">Compartir</button>
+    </div>
+  </section>
+
+  <!-- 4. Publicar -->
+  <section class="card hidden" id="cardPub">
+    <h2><span class="step">4</span> Servidor</h2>
+    <dl class="kv" id="curInfo"><dt>Publicado</dt><dd>—</dd></dl>
+    <label for="srv1">Servidor principal</label>
+    <input id="srv1" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://servidor.com:8080">
+    <label for="srv2">Respaldo 1 (opcional)</label>
+    <input id="srv2" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://respaldo.com:8080">
+    <label for="srv3">Respaldo 2 (opcional)</label>
+    <input id="srv3" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <details style="margin-top:12px">
+      <summary>Servidores anteriores</summary>
+      <p>Las TV que todavía usan alguno de estos se pasan al principal. Los anteriores se agregan solos; aquí puedes añadir otros, uno por línea.</p>
+      <textarea id="known" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="viejo.servidor.com"></textarea>
+    </details>
+    <div class="row">
+      <button id="btnPublish" class="grow">Publicar</button>
+      <button id="btnReload" class="secondary">Recargar</button>
+    </div>
+    <div class="msg" id="msgPub"></div>
+  </section>
+
+  <!-- 5. Cambiar clave -->
+  <section class="card hidden" id="cardRotate">
+    <h2>Cambiar el Server Pass</h2>
+    <p>Úsalo solo si alguien que no debe conoce la clave. Todas las TV pedirán la nueva al abrir la app. El servidor publicado no cambia.</p>
+    <div class="row"><button id="btnRotate" class="danger grow">Crear un Server Pass nuevo</button></div>
+    <div class="msg" id="msgRot"></div>
+  </section>
+</main>
+
+<script>
+/*CRYPTO-START*/
+// Debe coincidir EXACTO con la app (ServerCrypto.kt).
+const MAGIC = 'AUR1';
+const ITER = 200000;
+const te = new TextEncoder();
+const td = new TextDecoder();
+
+function b64(bytes) {
+  let s = '';
+  const u = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+  return btoa(s);
+}
+function unb64(str) {
+  const s = atob(String(str).replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, ''));
+  const u = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+  return u;
+}
+function normalizePass(p) { return String(p).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+function newPass() {
+  const alpha = 'abcdefghjkmnpqrstuvwxyz23456789'; // sin 0/o, 1/l/i
+  let out = '';
+  while (out.length < 12) {
+    const b = crypto.getRandomValues(new Uint8Array(1))[0];
+    if (b < 248) out += alpha[b % 31];
+  }
+  return out.slice(0, 4) + '-' + out.slice(4, 8) + '-' + out.slice(8, 12);
+}
+
+async function deriveKey(pass, g, i) {
+  const base = await crypto.subtle.importKey('raw', te.encode(normalizePass(pass)), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: te.encode('aurora-sp|' + g), iterations: i, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+
+async function newKit() {
+  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const sk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  const pub = b64(await crypto.subtle.exportKey('spki', kp.publicKey));
+  return { v: 1, sk, pub, pass: newPass(), gen: 1 };
+}
+function kitToText(kit) { return 'AURKIT1:' + b64(te.encode(JSON.stringify(kit))); }
+function kitFromText(t) {
+  const s = String(t).trim();
+  if (!s.startsWith('AURKIT1:')) throw new Error('El kit debe empezar con AURKIT1:');
+  const k = JSON.parse(td.decode(unb64(s.slice(8))));
+  if (!k.sk || !k.pub || !k.pass || !k.gen) throw new Error('Kit incompleto');
+  return k;
+}
+
+/** Cifra y firma. Devuelve el objeto del archivo. */
+async function seal(kit, g, n, payload) {
+  const i = ITER;
+  const key = await deriveKey(kit.pass, g, i);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const aad = te.encode(`${MAGIC}|${g}|${i}|${n}`);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad, tagLength: 128 }, key, te.encode(JSON.stringify(payload)));
+  const v = b64(iv), c = b64(ct);
+  const sk = await crypto.subtle.importKey('jwk', kit.sk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, sk, te.encode(`${MAGIC}|${g}|${i}|${n}|${v}|${c}`));
+  return { a: MAGIC, g, i, n, v, c, s: b64(sig) };
+}
+
+/** Comprueba la firma y descifra. Lanza error si no se puede. */
+async function openFile(kit, f) {
+  if (!f || f.a !== MAGIC) throw new Error('Formato desconocido');
+  const pk = await crypto.subtle.importKey('spki', unb64(kit.pub), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+  const okSig = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pk, unb64(f.s), te.encode(`${MAGIC}|${f.g}|${f.i}|${f.n}|${f.v}|${f.c}`));
+  if (!okSig) throw new Error('El archivo publicado no está firmado con tus llaves');
+  const key = await deriveKey(kit.pass, f.g, f.i);
+  let pt;
+  try {
+    pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(f.v), additionalData: te.encode(`${MAGIC}|${f.g}|${f.i}|${f.n}`), tagLength: 128 }, key, unb64(f.c));
+  } catch (e) { throw new Error('Tu Server Pass no abre el archivo publicado'); }
+  return JSON.parse(td.decode(pt));
+}
+
+function normalizeServer(s) {
+  let x = String(s || '').trim();
+  if (!x) return '';
+  if (!/^https?:\/\//i.test(x)) x = 'http://' + x;
+  return x.replace(/\/+$/, '');
+}
+function hostOf(s) {
+  return normalizeServer(s).replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].toLowerCase();
+}
+/*CRYPTO-END*/
+
+// ---------------- Almacenamiento local (solo este teléfono) ----------------
+const LS_CFG = 'panel.cfg', LS_KIT = 'panel.kit';
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
+function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+let cfg = null, kit = null, current = null;
+try { cfg = JSON.parse(lsGet(LS_CFG) || 'null'); } catch (e) {}
+try { const t = lsGet(LS_KIT); if (t) kit = kitFromText(t); } catch (e) {}
+
+const $ = id => document.getElementById(id);
+function say(id, text, kind) { const el = $(id); el.textContent = text || ''; el.className = 'msg' + (kind ? ' ' + kind : ''); }
+async function copy(text, msgId) {
+  try { await navigator.clipboard.writeText(text); say(msgId, 'Copiado.', 'ok'); }
+  catch (e) { say(msgId, 'No se pudo copiar: mantén presionado el texto y copia.', 'warn'); }
+}
+
+// ---------------- GitHub ----------------
+function rawUrl() { return `https://raw.githubusercontent.com/${cfg.user}/${cfg.repo}/main/${cfg.path}`; }
+function apiUrl() { return `https://api.github.com/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}/contents/${cfg.path.split('/').map(encodeURIComponent).join('/')}`; }
+async function gh(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: {
+      'Authorization': 'Bearer ' + cfg.token,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(body ? { 'Content-Type': 'application/json' } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined,
+    cache: 'no-store'
+  });
+  let data = null;
+  try { data = await r.json(); } catch (e) {}
+  return { status: r.status, ok: r.ok, data };
+}
+function ghError(r) {
+  if (r.status === 401) return 'GitHub rechazó el token (401). Revisa que esté bien copiado y no haya vencido.';
+  if (r.status === 403) return 'El token no tiene permiso para escribir (403). Debe tener "Contents: Read and write" en este repositorio.';
+  if (r.status === 404) return 'No se encontró el repositorio (404). Revisa usuario, nombre del repositorio y que el token tenga acceso a él.';
+  return 'GitHub respondió ' + r.status + (r.data && r.data.message ? ': ' + r.data.message : '');
+}
+
+/** Lee el archivo publicado. */
+async function loadCurrent() {
+  const r = await gh('GET', apiUrl() + '?ref=main&t=' + Date.now());
+  if (r.status === 404) {
+    // ¿No existe el archivo, o no existe el repositorio?
+    const repo = await gh('GET', `https://api.github.com/repos/${encodeURIComponent(cfg.user)}/${encodeURIComponent(cfg.repo)}`);
+    if (!repo.ok) throw new Error(ghError(repo));
+    return { exists: false };
+  }
+  if (!r.ok) throw new Error(ghError(r));
+  const text = td.decode(unb64(r.data.content || ''));
+  let file = null;
+  try { file = JSON.parse(text); } catch (e) {}
+  const out = { exists: true, sha: r.data.sha, file, payload: null, error: null };
+  if (kit && file) {
+    try { out.payload = await openFile(kit, file); } catch (e) { out.error = e.message; }
+  } else if (!file) {
+    out.error = 'El archivo publicado no es válido';
+  }
+  return out;
+}
+
+async function putFile(fileObj, sha, message) {
+  const body = { message, content: b64(te.encode(JSON.stringify(fileObj))), branch: 'main' };
+  if (sha) body.sha = sha;
+  const r = await gh('PUT', apiUrl(), body);
+  if (!r.ok) throw new Error(ghError(r));
+}
+
+// ---------------- Pantalla ----------------
+function render() {
+  if (cfg) {
+    $('ghUser').value = cfg.user; $('ghRepo').value = cfg.repo; $('ghPath').value = cfg.path; $('ghToken').value = cfg.token;
+  }
+  $('cardGh').classList.toggle('done', !!cfg);
+  $('cardKeys').classList.toggle('done', !!kit);
+  $('keysNone').classList.toggle('hidden', !!kit);
+  $('keysHave').classList.toggle('hidden', !kit);
+  if (kit) {
+    $('passShow').textContent = '••••-••••-••••';
+    $('btnRevealPass').textContent = 'Mostrar';
+    $('kitShow').textContent = kitToText(kit);
+  }
+  const ready = !!(cfg && kit);
+  $('cardQwen').classList.toggle('hidden', !ready);
+  $('cardPub').classList.toggle('hidden', !ready);
+  $('cardRotate').classList.toggle('hidden', !ready);
+  if (ready) {
+    $('qwenText').textContent =
+`Qwen: abre aurora-tv/app/src/main/java/com/aurora/tv/data/ServerSyncConfig.kt y cambia SOLO estas dos líneas (cópialas exactas, sin espacios extra):
+
+    const val CONFIG_URL = "${rawUrl()}"
+    const val PUBLIC_KEY = "${kit.pub}"
+
+No cambies nada más en ese archivo.`;
+  }
+}
+
+function showCurrent() {
+  const dl = $('curInfo');
+  dl.innerHTML = '';
+  const add = (k, v, cls) => {
+    const dt = document.createElement('dt'); dt.textContent = k;
+    const dd = document.createElement('dd');
+    if (cls) { const s = document.createElement('span'); s.className = 'pill ' + cls; s.textContent = v; dd.appendChild(s); }
+    else dd.textContent = v;
+    dl.append(dt, dd);
+  };
+  if (!current) { add('Publicado', '—'); return; }
+  if (!current.exists) { add('Publicado', 'Nada todavía'); return; }
+  if (current.error) { add('Estado', current.error, 'bad'); return; }
+  const p = current.payload;
+  add('Firma', 'Tuya ✓', 'ok');
+  add('Principal', p.servers[0] || '—');
+  if (p.servers[1]) add('Respaldo 1', p.servers[1]);
+  if (p.servers[2]) add('Respaldo 2', p.servers[2]);
+  add('Versión', String(current.file.n) + (p.t ? ' · ' + new Date(p.t * 1000).toLocaleString() : ''));
+  $('srv1').value = p.servers[0] || ''; $('srv2').value = p.servers[1] || ''; $('srv3').value = p.servers[2] || '';
+  $('known').value = (p.known || []).join('\n');
+}
+
+async function reload() {
+  say('msgPub', 'Leyendo lo publicado…');
+  try { current = await loadCurrent(); showCurrent(); say('msgPub', ''); }
+  catch (e) { current = null; showCurrent(); say('msgPub', e.message, 'bad'); }
+}
+
+$('btnGhSave').onclick = async () => {
+  const user = $('ghUser').value.trim(), repo = $('ghRepo').value.trim(), path = $('ghPath').value.trim() || 'data.json', token = $('ghToken').value.trim();
+  if (!user || !repo || !token) return say('msgGh', 'Completa usuario, repositorio y token.', 'bad');
+  cfg = { user, repo, path, token };
+  say('msgGh', 'Probando…');
+  try {
+    const r = await gh('GET', `https://api.github.com/repos/${encodeURIComponent(user)}/${encodeURIComponent(repo)}`);
+    if (!r.ok) throw new Error(ghError(r));
+    if (r.data && r.data.private) say('msgGh', 'Conectado, pero el repositorio es PRIVADO: las TV no podrán leer el archivo. Hazlo público (el archivo va cifrado).', 'warn');
+    else say('msgGh', 'Conectado ✓', 'ok');
+    lsSet(LS_CFG, JSON.stringify(cfg));
+    render();
+    if (kit) reload();
+  } catch (e) { say('msgGh', e.message, 'bad'); }
+};
+
+$('btnCreate').onclick = async () => {
+  if (kit && !confirm('Ya hay llaves. ¿Crear otras?')) return;
+  kit = await newKit();
+  lsSet(LS_KIT, kitToText(kit));
+  render();
+  $('keysHave').querySelector('details').open = true;
+  say('msgKeys', 'Listo. Guarda ahora el kit de respaldo (arriba) en la app Contraseñas o en una nota bloqueada.', 'warn');
+  if (cfg) reload();
+};
+$('btnShowImport').onclick = () => $('importBox').classList.toggle('hidden');
+$('btnImport').onclick = () => {
+  try {
+    kit = kitFromText($('kitIn').value);
+    lsSet(LS_KIT, kitToText(kit));
+    $('kitIn').value = '';
+    render();
+    say('msgKeys', 'Kit importado ✓', 'ok');
+    if (cfg) reload();
+  } catch (e) { say('msgKeys', e.message, 'bad'); }
+};
+$('btnRevealPass').onclick = () => {
+  const shown = $('passShow').textContent === kit.pass;
+  $('passShow').textContent = shown ? '••••-••••-••••' : kit.pass;
+  $('btnRevealPass').textContent = shown ? 'Mostrar' : 'Ocultar';
+};
+$('btnCopyPass').onclick = () => copy(kit.pass, 'msgKeys');
+$('btnCopyKit').onclick = () => copy(kitToText(kit), 'msgKeys');
+$('btnForget').onclick = () => {
+  if (!confirm('¿Borrar las llaves de este teléfono? Sin el kit de respaldo no podrás volver a publicar.')) return;
+  lsDel(LS_KIT); kit = null; current = null; render(); say('msgKeys', 'Borrado de este teléfono.');
+};
+$('btnCopyQwen').onclick = () => copy($('qwenText').textContent, 'msgKeys');
+$('btnShareQwen').onclick = async () => {
+  try { await navigator.share({ title: 'Mensaje para Qwen', text: $('qwenText').textContent }); }
+  catch (e) { if (e && e.name !== 'AbortError') copy($('qwenText').textContent, 'msgKeys'); }
+};
+$('btnReload').onclick = reload;
+
+$('btnPublish').onclick = async () => {
+  const servers = [$('srv1').value, $('srv2').value, $('srv3').value].map(normalizeServer).filter(Boolean)
+    .filter((s, i, a) => a.findIndex(x => x.toLowerCase() === s.toLowerCase()) === i);
+  if (!servers.length) return say('msgPub', 'Escribe el servidor principal.', 'bad');
+  for (const s of servers) {
+    if (!/^https?:\/\/[a-z0-9.-]+(:\d{1,5})?(\/.*)?$/i.test(s)) return say('msgPub', 'Revisa la dirección: ' + s, 'bad');
+  }
+  $('btnPublish').disabled = true;
+  say('msgPub', 'Cifrando y publicando…');
+  try {
+    const cur = await loadCurrent();
+    let g = kit.gen, n = 1, known = [];
+    if (cur.exists && cur.file) {
+      if (cur.file.g > kit.gen) throw new Error('Lo publicado usa un Server Pass más nuevo que el de este teléfono. Importa tu kit más reciente.');
+      n = (Number(cur.file.n) || 0) + 1;
+      if (cur.payload) {
+        known = (cur.payload.known || []).concat((cur.payload.servers || []).map(hostOf));
+      } else if (!confirm('No se puede abrir lo publicado (' + cur.error + '). ¿Reemplazarlo de todos modos?')) {
+        throw new Error('Cancelado.');
+      }
+    }
+    known = known.concat($('known').value.split(/[\s,]+/).map(hostOf))
+      .filter(Boolean).filter((h, i, a) => a.indexOf(h) === i).slice(-30);
+    const payload = { servers, known, n, t: Math.floor(Date.now() / 1000) };
+    const fileObj = await seal(kit, g, n, payload);
+    await putFile(fileObj, cur.sha, 'update ' + n);
+    say('msgPub', 'Publicado ✓ Las TV lo toman al abrir la app, cada 6 horas o en cuanto falle el servidor anterior. GitHub puede tardar hasta 5 minutos en mostrarlo.', 'ok');
+    current = { exists: true, file: fileObj, payload, sha: null };
+    showCurrent();
+  } catch (e) { say('msgPub', e.message, 'bad'); }
+  finally { $('btnPublish').disabled = false; }
+};
+
+$('btnRotate').onclick = async () => {
+  if (!confirm('Se creará un Server Pass nuevo y TODAS las TV lo pedirán. ¿Continuar?')) return;
+  $('btnRotate').disabled = true;
+  say('msgRot', 'Creando y publicando…');
+  try {
+    const cur = await loadCurrent();
+    if (!cur.exists) {
+      kit = { ...kit, pass: newPass() };
+      lsSet(LS_KIT, kitToText(kit));
+      render();
+      say('msgRot', 'Server Pass nuevo creado (todavía no había nada publicado). Guarda el kit de respaldo otra vez.', 'warn');
+      return;
+    }
+    if (!cur.payload) throw new Error('Primero hay que poder abrir lo publicado: ' + cur.error);
+    const next = { ...kit, pass: newPass(), gen: cur.file.g + 1 };
+    const n = (Number(cur.file.n) || 0) + 1;
+    const payload = { servers: cur.payload.servers, known: cur.payload.known || [], n, t: Math.floor(Date.now() / 1000) };
+    const fileObj = await seal(next, next.gen, n, payload);
+    await putFile(fileObj, cur.sha, 'rotate ' + next.gen);
+    kit = next;
+    lsSet(LS_KIT, kitToText(kit));
+    render();
+    $('keysHave').querySelector('details').open = true;
+    say('msgRot', 'Listo ✓ Nuevo Server Pass: ' + kit.pass + '\nGuarda otra vez el kit de respaldo: el anterior ya no sirve.', 'ok');
+    current = { exists: true, file: fileObj, payload, sha: null };
+    showCurrent();
+  } catch (e) { say('msgRot', e.message, 'bad'); }
+  finally { $('btnRotate').disabled = false; }
+};
+
+render();
+if (cfg && kit) reload();
+</script>
+</body>
+</html>
